@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # ViT Smart POS ERP
 
 React + Vite ERP for supermarket and coconut oil mill operations, including inventory, POS billing, copra milling service, BOM production, purchases, attendance, loans, and reports.
@@ -86,3 +87,6 @@ git status
 ```
 
 Do not commit `.env`; it is ignored. Commit `.env.example` only.
+=======
+# ViT-Smart-POS-ERP
+>>>>>>> 24658244638bce89787c7bc9e6608ca107129637
