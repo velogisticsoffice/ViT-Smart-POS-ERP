@@ -1,0 +1,102 @@
+import { useEffect, useState } from "react";
+import { collection, onSnapshot, query, orderBy, serverTimestamp, runTransaction, doc } from "firebase/firestore";
+import { db, isFirebaseConfigured } from "../firebase";
+import { demoSales } from "../data/demoData";
+
+export function useSales() {
+  const [salesHistory, setSalesHistory] = useState(() => (isFirebaseConfigured ? [] : demoSales));
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!isFirebaseConfigured) {
+      return undefined;
+    }
+
+    const q = query(collection(db, "sales"), orderBy("createdAt", "desc"));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        setSalesHistory(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+      },
+      (err) => {
+        setError(err.message || "Unable to load sales history");
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  const processSale = async (cartItems, customer = "Walk-in Customer", notes = "") => {
+    if (!isFirebaseConfigured) {
+      const items = cartItems.map((item) => ({
+        productId: item.id,
+        product: item.product,
+        sku: item.sku,
+        price: item.price,
+        quantity: item.quantity,
+        total: item.price * item.quantity,
+        unit: item.unit,
+      }));
+      const amount = items.reduce((sum, item) => sum + item.total, 0);
+      setSalesHistory((current) => [
+        {
+          id: `INV-${Date.now().toString().slice(-5)}`,
+          customer,
+          notes,
+          items,
+          amount,
+          date: new Date().toLocaleString(),
+        },
+        ...current,
+      ]);
+      return { success: true };
+    }
+
+    try {
+      await runTransaction(db, async (transaction) => {
+        const newSaleRef = doc(collection(db, "sales"));
+        const items = cartItems.map((item) => ({
+          productId: item.id,
+          product: item.product,
+          sku: item.sku,
+          price: item.price,
+          quantity: item.quantity,
+          total: item.price * item.quantity,
+          unit: item.unit,
+        }));
+        const amount = items.reduce((sum, item) => sum + item.total, 0);
+
+        transaction.set(newSaleRef, {
+          customer,
+          notes,
+          items,
+          amount,
+          createdAt: serverTimestamp(),
+          date: new Date().toLocaleString(),
+        });
+
+        for (const cartItem of cartItems) {
+          const inventoryRef = doc(db, "inventory", cartItem.id);
+          const inventorySnapshot = await transaction.get(inventoryRef);
+          if (!inventorySnapshot.exists()) {
+            throw new Error(`Inventory item not found: ${cartItem.product}`);
+          }
+          const currentStock = inventorySnapshot.data().stock || 0;
+          if (currentStock < cartItem.quantity) {
+            throw new Error(`Insufficient stock for ${cartItem.product}`);
+          }
+          transaction.update(inventoryRef, {
+            stock: currentStock - cartItem.quantity,
+          });
+        }
+      });
+
+      return { success: true };
+    } catch (err) {
+      setError(err.message || "Sale processing failed");
+      return { success: false, message: err.message || "Sale processing failed" };
+    }
+  };
+
+  return { salesHistory, error, processSale };
+}

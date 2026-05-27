@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ViT Smart POS ERP</title>
+  </head>
+  <body>
+    <div id="root" style="min-height: 100vh; background: #031b4e; color: white; padding: 24px;">
+      Loading ViT Smart POS ERP...
+    </div>
+    <script>
+      window.addEventListener("error", function (event) {
+        document.getElementById("root").innerHTML =
+          '<div style="font-family: Arial, sans-serif; color: #fecaca;"><h1>JavaScript load error</h1><pre style="white-space: pre-wrap;">' +
+          event.message +
+          "</pre></div>";
+      });
+      window.addEventListener("unhandledrejection", function (event) {
+        document.getElementById("root").innerHTML =
+          '<div style="font-family: Arial, sans-serif; color: #fecaca;"><h1>JavaScript promise error</h1><pre style="white-space: pre-wrap;">' +
+          (event.reason && event.reason.message ? event.reason.message : event.reason) +
+          "</pre></div>";
+      });
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
