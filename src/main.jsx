@@ -2,6 +2,7 @@ import { Component, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
+import { BusinessProvider } from './context/BusinessContext.jsx'
 
 class AppErrorBoundary extends Component {
   constructor(props) {
@@ -32,7 +33,9 @@ class AppErrorBoundary extends Component {
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <AppErrorBoundary>
-      <App />
+      <BusinessProvider>
+        <App />
+      </BusinessProvider>
     </AppErrorBoundary>
   </StrictMode>,
 )

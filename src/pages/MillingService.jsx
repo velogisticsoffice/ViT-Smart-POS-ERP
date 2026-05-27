@@ -1,12 +1,20 @@
 import { useState, useEffect } from "react";
-import { collection, addDoc, onSnapshot, deleteDoc, doc, runTransaction, query, orderBy, serverTimestamp } from "firebase/firestore";
-import { db } from "../firebase";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
+import { collection, onSnapshot, deleteDoc, doc, runTransaction, query, orderBy, serverTimestamp, where } from "firebase/firestore";
+import { db, isFirebaseConfigured } from "../firebase";
+import { demoInventory } from "../data/demoData";
+import { useBusinessContext } from "../context/BusinessContext";
+
+const jsPDF = null;
+const autoTable = () => {};
 
 export default function MillingService() {
+  const { currentBranchId, currentBranch, currentUser } = useBusinessContext();
   const [jobs, setJobs] = useState([]);
-  const [inventoryItems, setInventoryItems] = useState([]);
+  const [inventoryItems, setInventoryItems] = useState(() =>
+    isFirebaseConfigured
+      ? []
+      : demoInventory.map((item) => ({ ...item, branchId: item.branchId || "main" }))
+  );
   
   // Form input states
   const [farmerName, setFarmerName] = useState("");
@@ -14,12 +22,20 @@ export default function MillingService() {
   const [copraWeight, setCopraWeight] = useState("");
   const [processingRate, setProcessingRate] = useState("8"); // ₹8 per kg default
   const [extractionRate, setExtractionRate] = useState("55"); // 55% default oil extraction yield
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(isFirebaseConfigured);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Fetch live milling jobs & inventory items
   useEffect(() => {
-    const qJobs = query(collection(db, "milling_jobs"), orderBy("timestamp", "desc"));
+    if (!isFirebaseConfigured) {
+      return undefined;
+    }
+
+    const qJobs = query(
+      collection(db, "milling_jobs"),
+      where("branchId", "==", currentBranchId || "main"),
+      orderBy("timestamp", "desc")
+    );
     const unsubJobs = onSnapshot(qJobs, (snap) => {
       setJobs(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
       setIsLoading(false);
@@ -28,15 +44,22 @@ export default function MillingService() {
       setIsLoading(false);
     });
 
-    const unsubInventory = onSnapshot(collection(db, "inventory"), (snap) => {
+    const unsubInventory = onSnapshot(
+      query(collection(db, "inventory"), where("branchId", "==", currentBranchId || "main")),
+      (snap) => {
       setInventoryItems(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
-    });
+      }
+    );
 
     return () => {
       unsubJobs();
       unsubInventory();
     };
-  }, []);
+  }, [currentBranchId]);
+
+  const branchInventoryItems = inventoryItems.filter(
+    (item) => (item.branchId || "main") === (currentBranchId || "main")
+  );
 
   // Real-time dynamic calculations
   const weightVal = Number(copraWeight || 0);
@@ -50,6 +73,71 @@ export default function MillingService() {
   // PDF Generator for Crushing Slip Receipt
   const downloadMillingSlip = (jobRecord) => {
     try {
+      if (typeof document !== "undefined") {
+        const slipNo = `MIL-${jobRecord.id?.slice(0, 8).toUpperCase() || "TEMP"}`;
+        const rows = [
+          ["Raw Copra Weight Brought", `${Number(jobRecord.copraWeight || 0).toLocaleString()} kg`],
+          ["Oil Extraction Rate", `${jobRecord.extractionRate}%`],
+          ["Expected Coconut Oil Output", `${Number(jobRecord.expectedOil || 0).toFixed(2)} Liters`],
+          ["Retained Copra Cake", `${Number(jobRecord.expectedCake || 0).toFixed(2)} kg`],
+          ["Processing Service Rate", `Rs. ${jobRecord.processingRate || processingRate} per kg`],
+          ["Processing Service Fee", `Rs. ${Number(jobRecord.serviceFee || 0).toLocaleString()}`],
+        ];
+        const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>${slipNo}</title>
+    <style>
+      body { font-family: Arial, sans-serif; color: #1f2937; margin: 32px; }
+      header { background: #031b34; color: white; padding: 20px 24px; border-radius: 12px; }
+      h1 { margin: 0; font-size: 24px; }
+      .muted { color: #64748b; }
+      .meta { display: flex; justify-content: space-between; margin: 22px 0; gap: 24px; }
+      table { width: 100%; border-collapse: collapse; margin-top: 18px; }
+      th, td { border: 1px solid #dbe4ef; padding: 12px; text-align: left; }
+      th { background: #eef5ff; }
+      .audit { background: #f8fafc; border: 1px solid #dbe4ef; border-radius: 12px; margin-top: 20px; padding: 14px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>VEERASHAIVA COCONUT OIL MILL</h1>
+      <div>Copra Crushing, Milling & Byproduct Service</div>
+    </header>
+    <section class="meta">
+      <div>
+        <strong>Farmer / Customer</strong><br />
+        ${jobRecord.farmerName}<br />
+        <span class="muted">${jobRecord.farmerPhone || "Phone not provided"}</span>
+      </div>
+      <div>
+        <strong>Mill Slip:</strong> ${slipNo}<br />
+        <strong>Date:</strong> ${jobRecord.date || new Date().toLocaleDateString()}<br />
+        <strong>Desk:</strong> Milling-01
+      </div>
+    </section>
+    <table>
+      <thead><tr><th>Crushing Parameter</th><th>Value</th></tr></thead>
+      <tbody>${rows.map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`).join("")}</tbody>
+    </table>
+    <div class="audit">
+      <strong>Retained Byproduct Audit:</strong>
+      Retained ${Number(jobRecord.expectedCake || 0).toFixed(2)} kg of Copra Cake at the mill warehouse.
+      Net service fee: Rs. ${Number(jobRecord.serviceFee || 0).toLocaleString()}.
+    </div>
+  </body>
+</html>`;
+        const blob = new Blob([html], { type: "text/html" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `Milling_Slip_${slipNo}.html`;
+        link.click();
+        URL.revokeObjectURL(url);
+        return;
+      }
+
       const doc = new jsPDF();
 
       // Slip Branded Header
@@ -143,23 +231,82 @@ export default function MillingService() {
       return alert("Farmer name and raw Copra weight are required.");
     }
 
+    if (weightVal <= 0 || rateVal < 0 || yieldPct < 0 || yieldPct > 100) {
+      return alert("Please enter valid copra weight, charge, and extraction percentage between 0 and 100.");
+    }
+
     setIsSubmitting(true);
 
     try {
+      if (!isFirebaseConfigured) {
+        const newJob = {
+          id: String(Date.now()),
+          farmerName,
+          farmerPhone,
+          copraWeight: Number(copraWeight),
+          extractionRate: Number(extractionRate),
+          processingRate: Number(processingRate),
+          expectedOil: Number(expectedOil),
+          expectedCake: Number(expectedCake),
+          serviceFee: Number(totalServiceFee),
+          date: new Date().toLocaleDateString(),
+          branchId: currentBranchId || "main",
+          branchName: currentBranch?.name || "Main Branch",
+          createdBy: currentUser?.id || "system",
+          createdByName: currentUser?.name || "System",
+        };
+
+        setJobs((current) => [newJob, ...current]);
+        setInventoryItems((current) => {
+          const cakeItem = current.find(
+            (i) => i.sku?.toUpperCase() === "COPRA-CAKE" || i.product?.toLowerCase().includes("copra cake")
+          );
+
+          if (cakeItem) {
+            return current.map((item) =>
+              item.id === cakeItem.id
+                ? { ...item, stock: Number(item.stock || 0) + Number(expectedCake) }
+                : item
+            );
+          }
+
+          return [
+            ...current,
+            {
+              id: `copra-cake-${Date.now()}`,
+              sku: "COPRA-CAKE",
+              product: "Copra Cake (Wastage Byproduct)",
+              category: "Raw Materials",
+              unit: "kg",
+              price: 15,
+              stock: Number(expectedCake),
+              branchId: currentBranchId || "main",
+              created: new Date().toLocaleDateString(),
+            },
+          ];
+        });
+
+        setFarmerName("");
+        setFarmerPhone("");
+        setCopraWeight("");
+        setProcessingRate("8");
+        setExtractionRate("55");
+        alert("Demo milling job registered. Retained copra cake stock and service income are reflected in this session.");
+        setIsSubmitting(false);
+        return;
+      }
+
       // Execute a transaction to ensure both milling job creation, stock incrementing, and financial syncing are atomic!
       await runTransaction(db, async (transaction) => {
         // 1. Search for existing Copra Cake byproduct in inventory
-        const cakeItem = inventoryItems.find(
+        const cakeItem = branchInventoryItems.find(
           (i) => i.sku?.toUpperCase() === "COPRA-CAKE" || i.product?.toLowerCase().includes("copra cake")
         );
 
-        let cakeRef;
-        let finalCakeStock = Number(expectedCake);
-
         if (cakeItem) {
-          cakeRef = doc(db, "inventory", cakeItem.id);
+          const cakeRef = doc(db, "inventory", cakeItem.id);
           const currentStock = Number(cakeItem.stock || 0);
-          finalCakeStock = currentStock + Number(expectedCake);
+          const finalCakeStock = currentStock + Number(expectedCake);
           transaction.update(cakeRef, { stock: finalCakeStock });
         } else {
           // If byproduct doesn't exist, create it as a new product in inventory
@@ -173,6 +320,7 @@ export default function MillingService() {
             unit: "kg",
             price: 15, // Nominal byproduct cost per kg
             stock: Number(expectedCake),
+            branchId: currentBranchId || "main",
             created: new Date().toLocaleDateString()
           });
         }
@@ -190,6 +338,10 @@ export default function MillingService() {
           expectedCake: Number(expectedCake),
           serviceFee: Number(totalServiceFee),
           date: new Date().toLocaleDateString(),
+          branchId: currentBranchId || "main",
+          branchName: currentBranch?.name || "Main Branch",
+          createdBy: currentUser?.id || "system",
+          createdByName: currentUser?.name || "System",
           timestamp: serverTimestamp()
         });
 
@@ -201,6 +353,10 @@ export default function MillingService() {
           amount: Number(totalServiceFee),
           notes: `Crushed ${copraWeight} kg Copra. Retained ${expectedCake.toFixed(1)} kg Cake byproduct.`,
           date: new Date().toLocaleDateString(),
+          branchId: currentBranchId || "main",
+          branchName: currentBranch?.name || "Main Branch",
+          createdBy: currentUser?.id || "system",
+          createdByName: currentUser?.name || "System",
           timestamp: serverTimestamp()
         });
       });
@@ -240,6 +396,11 @@ export default function MillingService() {
   // Delete Job Log
   const handleDeleteJob = async (id) => {
     if (!window.confirm("Are you sure you want to delete this milling job entry?")) return;
+    if (!isFirebaseConfigured) {
+      setJobs((current) => current.filter((job) => job.id !== id));
+      return;
+    }
+
     try {
       await deleteDoc(doc(db, "milling_jobs", id));
     } catch (err) {

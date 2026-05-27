@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import { deleteDoc, doc, updateDoc } from "firebase/firestore";
 import {
   Boxes,
   Edit3,
@@ -10,7 +9,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { db } from "../firebase";
 import { useInventory } from "../hooks/useInventory";
 
 const initialForm = {
@@ -47,7 +45,7 @@ const formatCurrency = (value) =>
   }).format(Number(value || 0));
 
 export default function Products() {
-  const { items, isLoading, error, addItem } = useInventory();
+  const { items, isLoading, error, addItem, deleteItem, updateItem } = useInventory();
   const [formData, setFormData] = useState(initialForm);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("All");
@@ -116,7 +114,8 @@ export default function Products() {
 
     try {
       if (editingId) {
-        await updateDoc(doc(db, "inventory", editingId), payload);
+        const success = await updateItem(editingId, payload);
+        if (!success) throw new Error("Unable to update product.");
       } else {
         const duplicateSku = items.some(
           (item) => item.sku?.toLowerCase() === payload.sku.toLowerCase()
@@ -156,7 +155,8 @@ export default function Products() {
     if (!window.confirm(`Delete ${item.product}?`)) return;
 
     try {
-      await deleteDoc(doc(db, "inventory", item.id));
+      const success = await deleteItem(item.id);
+      if (!success) throw new Error("Unable to delete product.");
     } catch (err) {
       console.error("Product delete failed:", err);
       alert("Unable to delete product.");

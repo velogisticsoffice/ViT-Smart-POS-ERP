@@ -1,12 +1,18 @@
 import { useState, useEffect } from "react";
-import { collection, addDoc, onSnapshot, deleteDoc, doc, runTransaction, query, orderBy, serverTimestamp } from "firebase/firestore";
+import { collection, addDoc, onSnapshot, deleteDoc, doc, runTransaction, query, orderBy, serverTimestamp, where } from "firebase/firestore";
 import { db, isFirebaseConfigured } from "../firebase";
 import { demoInventory } from "../data/demoData";
+import { useBusinessContext } from "../context/BusinessContext";
 
 export default function Production() {
+  const { currentBranchId, currentBranch, currentUser } = useBusinessContext();
   const [recipes, setRecipes] = useState([]); // Loaded BOM Recipes
   const [batches, setBatches] = useState([]); // Loaded Batch Production logs
-  const [inventoryItems, setInventoryItems] = useState(() => (isFirebaseConfigured ? [] : demoInventory));
+  const [inventoryItems, setInventoryItems] = useState(() =>
+    isFirebaseConfigured
+      ? []
+      : demoInventory.map((item) => ({ ...item, branchId: item.branchId || "main" }))
+  );
 
   // BOM Form States
   const [finishedProductId, setFinishedProductId] = useState("");
@@ -29,34 +35,48 @@ export default function Production() {
     }
 
     // 1. Fetch live BOM Recipes
-    const unsubRecipes = onSnapshot(collection(db, "bom_recipes"), (snap) => {
+    const unsubRecipes = onSnapshot(
+      query(collection(db, "bom_recipes"), where("branchId", "==", currentBranchId || "main")),
+      (snap) => {
       setRecipes(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
-    });
+      }
+    );
 
     // 2. Fetch live Completed Production Batches
-    const qBatches = query(collection(db, "production_batches"), orderBy("timestamp", "desc"));
+    const qBatches = query(
+      collection(db, "production_batches"),
+      where("branchId", "==", currentBranchId || "main"),
+      orderBy("timestamp", "desc")
+    );
     const unsubBatches = onSnapshot(qBatches, (snap) => {
       setBatches(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
     });
 
     // 3. Fetch live Inventory items
-    const unsubInventory = onSnapshot(collection(db, "inventory"), (snap) => {
+    const unsubInventory = onSnapshot(
+      query(collection(db, "inventory"), where("branchId", "==", currentBranchId || "main")),
+      (snap) => {
       setInventoryItems(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
-    });
+      }
+    );
 
     return () => {
       unsubRecipes();
       unsubBatches();
       unsubInventory();
     };
-  }, []);
+  }, [currentBranchId]);
+
+  const branchInventoryItems = inventoryItems.filter(
+    (item) => (item.branchId || "main") === (currentBranchId || "main")
+  );
 
   // Add temporary ingredient to BOM list
   const handleAddIngredientToBOM = (e) => {
     e.preventDefault();
     if (!selectedIngredientId || !requiredQty) return;
 
-    const matched = inventoryItems.find((i) => i.id === selectedIngredientId);
+    const matched = branchInventoryItems.find((i) => i.id === selectedIngredientId);
     if (!matched) return;
 
     if (ingredients.some((i) => i.id === selectedIngredientId)) {
@@ -90,7 +110,7 @@ export default function Production() {
       return alert("Please fill out recipe name, select finished product, and add at least one BOM ingredient.");
     }
 
-    const matchedProduct = inventoryItems.find((i) => i.id === finishedProductId);
+    const matchedProduct = branchInventoryItems.find((i) => i.id === finishedProductId);
     if (!matchedProduct) return;
 
     try {
@@ -103,6 +123,10 @@ export default function Production() {
             finishedProductName: matchedProduct.product,
             finishedProductSku: matchedProduct.sku,
             ingredients,
+            branchId: currentBranchId || "main",
+            branchName: currentBranch?.name || "Main Branch",
+            createdBy: currentUser?.id || "system",
+            createdByName: currentUser?.name || "System",
             created: new Date().toLocaleDateString(),
           },
           ...current,
@@ -125,6 +149,10 @@ export default function Production() {
           unit: i.unit,
           qtyPerUnit: Number(i.qtyPerUnit),
         })),
+        branchId: currentBranchId || "main",
+        branchName: currentBranch?.name || "Main Branch",
+        createdBy: currentUser?.id || "system",
+        createdByName: currentUser?.name || "System",
         created: new Date().toLocaleDateString(),
         timestamp: serverTimestamp(),
       });
@@ -155,6 +183,39 @@ export default function Production() {
 
     try {
       if (!isFirebaseConfigured) {
+        const missingItems = recipe.ingredients
+          .map((ing) => {
+            const item = branchInventoryItems.find((inventoryItem) => inventoryItem.id === ing.id);
+            const available = Number(item?.stock || 0);
+            const required = Number(ing.qtyPerUnit) * size;
+            return available < required
+              ? `${ing.product}: required ${required} ${ing.unit}, available ${available} ${ing.unit}`
+              : null;
+          })
+          .filter(Boolean);
+
+        if (missingItems.length > 0) {
+          alert(`Manufacturing Aborted. Missing stock:\n${missingItems.join("\n")}`);
+          setBatchLoading(false);
+          return;
+        }
+
+        setInventoryItems((current) =>
+          current.map((item) => {
+            if (item.id === recipe.finishedProductId) {
+              return { ...item, stock: Number(item.stock || 0) + size };
+            }
+
+            const ingredient = recipe.ingredients.find((ing) => ing.id === item.id);
+            if (!ingredient) return item;
+
+            return {
+              ...item,
+              stock: Number(item.stock || 0) - Number(ingredient.qtyPerUnit) * size,
+            };
+          })
+        );
+
         setBatches((current) => [
           {
             id: String(Date.now()),
@@ -167,6 +228,10 @@ export default function Production() {
               unit: i.unit,
             })),
             date: new Date().toLocaleDateString(),
+            branchId: currentBranchId || "main",
+            branchName: currentBranch?.name || "Main Branch",
+            createdBy: currentUser?.id || "system",
+            createdByName: currentUser?.name || "System",
           },
           ...current,
         ]);
@@ -228,6 +293,7 @@ export default function Production() {
             unit: "pcs",
             price: 180,
             stock: size,
+            branchId: currentBranchId || "main",
             created: new Date().toLocaleDateString(),
           });
         }
@@ -246,6 +312,10 @@ export default function Production() {
             unit: i.unit,
           })),
           date: new Date().toLocaleDateString(),
+          branchId: currentBranchId || "main",
+          branchName: currentBranch?.name || "Main Branch",
+          createdBy: currentUser?.id || "system",
+          createdByName: currentUser?.name || "System",
           timestamp: serverTimestamp(),
         });
       });
@@ -351,7 +421,7 @@ export default function Production() {
                   required
                 >
                   <option value="">Select Finished Goods Product</option>
-                  {inventoryItems
+                  {branchInventoryItems
                     .filter((i) => i.category === "Finished Goods")
                     .map((item) => (
                       <option key={item.id} value={item.id}>
@@ -375,7 +445,7 @@ export default function Production() {
                     className="w-full bg-[#07294d] border border-blue-900 p-3 rounded-xl outline-none text-white focus:border-blue-500 text-sm"
                   >
                     <option value="">Select Ingredient</option>
-                    {inventoryItems
+                    {branchInventoryItems
                       .filter((i) => i.id !== finishedProductId) // Cannot consume target product
                       .map((item) => (
                         <option key={item.id} value={item.id}>
@@ -545,7 +615,7 @@ export default function Production() {
                 {recipes
                   .find((r) => r.id === selectedRecipeId)
                   ?.ingredients?.map((ing) => {
-                    const matchedInv = inventoryItems.find((i) => i.id === ing.id);
+                    const matchedInv = branchInventoryItems.find((i) => i.id === ing.id);
                     const currentStock = matchedInv ? Number(matchedInv.stock || 0) : 0;
                     const requiredTotal = Number(ing.qtyPerUnit) * Number(batchSize);
                     const hasStock = currentStock >= requiredTotal;

@@ -1,10 +1,16 @@
 import { useEffect, useState } from "react";
-import { collection, onSnapshot, query, orderBy, serverTimestamp, runTransaction, doc } from "firebase/firestore";
+import { collection, onSnapshot, query, orderBy, serverTimestamp, runTransaction, doc, where } from "firebase/firestore";
 import { db, isFirebaseConfigured } from "../firebase";
 import { demoSales } from "../data/demoData";
+import { useBusinessContext } from "../context/BusinessContext";
 
 export function useSales() {
-  const [salesHistory, setSalesHistory] = useState(() => (isFirebaseConfigured ? [] : demoSales));
+  const { currentBranchId, currentBranch, currentUser } = useBusinessContext();
+  const [salesHistory, setSalesHistory] = useState(() =>
+    isFirebaseConfigured
+      ? []
+      : demoSales.map((sale) => ({ ...sale, branchId: sale.branchId || "main", branchName: sale.branchName || "Main Branch" }))
+  );
   const [error, setError] = useState(null);
 
   useEffect(() => {
@@ -12,7 +18,11 @@ export function useSales() {
       return undefined;
     }
 
-    const q = query(collection(db, "sales"), orderBy("createdAt", "desc"));
+    const q = query(
+      collection(db, "sales"),
+      where("branchId", "==", currentBranchId || "main"),
+      orderBy("createdAt", "desc")
+    );
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
@@ -24,7 +34,11 @@ export function useSales() {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [currentBranchId]);
+
+  const branchSalesHistory = salesHistory.filter(
+    (sale) => (sale.branchId || "main") === (currentBranchId || "main")
+  );
 
   const processSale = async (cartItems, customer = "Walk-in Customer", notes = "") => {
     if (!isFirebaseConfigured) {
@@ -46,6 +60,10 @@ export function useSales() {
           items,
           amount,
           date: new Date().toLocaleString(),
+          branchId: currentBranchId || "main",
+          branchName: currentBranch?.name || "Main Branch",
+          createdBy: currentUser?.id || "system",
+          createdByName: currentUser?.name || "System",
         },
         ...current,
       ]);
@@ -73,6 +91,10 @@ export function useSales() {
           amount,
           createdAt: serverTimestamp(),
           date: new Date().toLocaleString(),
+          branchId: currentBranchId || "main",
+          branchName: currentBranch?.name || "Main Branch",
+          createdBy: currentUser?.id || "system",
+          createdByName: currentUser?.name || "System",
         });
 
         for (const cartItem of cartItems) {
@@ -98,5 +120,5 @@ export function useSales() {
     }
   };
 
-  return { salesHistory, error, processSale };
+  return { salesHistory: branchSalesHistory, allSalesHistory: salesHistory, error, processSale };
 }

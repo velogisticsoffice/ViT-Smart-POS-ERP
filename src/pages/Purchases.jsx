@@ -1,12 +1,18 @@
 import { useState, useEffect } from "react";
-import { collection, addDoc, onSnapshot, query, serverTimestamp } from "firebase/firestore";
+import { collection, addDoc, onSnapshot, query, serverTimestamp, where } from "firebase/firestore";
 import { db, isFirebaseConfigured } from "../firebase";
 import { demoPurchases } from "../data/demoData";
+import { useBusinessContext } from "../context/BusinessContext";
 
 export default function Purchases() {
+  const { currentBranchId, currentBranch, currentUser } = useBusinessContext();
   const [currentView, setCurrentView] = useState("bills");
 
-  const [records, setRecords] = useState(() => (isFirebaseConfigured ? [] : demoPurchases));
+  const [records, setRecords] = useState(() =>
+    isFirebaseConfigured
+      ? []
+      : demoPurchases.map((record) => ({ ...record, branchId: record.branchId || "main", branchName: record.branchName || "Main Branch" }))
+  );
   const [vendor, setVendor] = useState("");
   const [amount, setAmount] = useState("");
   const [notes, setNotes] = useState("");
@@ -23,12 +29,14 @@ export default function Purchases() {
       return undefined;
     }
 
-    const q = query(collection(db, `purchase_${currentView}`));
+    const q = query(collection(db, `purchase_${currentView}`), where("branchId", "==", currentBranchId || "main"));
     const unsub = onSnapshot(q, (snapshot) => {
       setRecords(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
     return () => unsub();
-  }, [currentView]);
+  }, [currentView, currentBranchId]);
+
+  const branchRecords = records.filter((record) => (record.branchId || "main") === (currentBranchId || "main"));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -43,6 +51,10 @@ export default function Purchases() {
             amount: Number(amount),
             notes,
             date: new Date().toLocaleDateString(),
+            branchId: currentBranchId || "main",
+            branchName: currentBranch?.name || "Main Branch",
+            createdBy: currentUser?.id || "system",
+            createdByName: currentUser?.name || "System",
           },
           ...current,
         ]);
@@ -57,6 +69,10 @@ export default function Purchases() {
         amount: Number(amount),
         notes,
         date: new Date().toLocaleDateString(),
+        branchId: currentBranchId || "main",
+        branchName: currentBranch?.name || "Main Branch",
+        createdBy: currentUser?.id || "system",
+        createdByName: currentUser?.name || "System",
         timestamp: serverTimestamp()
       });
       setVendor("");
@@ -131,7 +147,7 @@ export default function Purchases() {
                 </tr>
               </thead>
               <tbody>
-                {records.map(rec => (
+                {branchRecords.map(rec => (
                   <tr key={rec.id} className="border-b border-blue-900/40 hover:bg-blue-900/20">
                     <td className="py-3 text-xs text-gray-400">{rec.date}</td>
                     <td className="py-3 font-semibold text-purple-300">{rec.vendor}</td>
@@ -139,7 +155,7 @@ export default function Purchases() {
                     <td className="py-3 text-right font-bold text-red-400">₹{rec.amount}</td>
                   </tr>
                 ))}
-                {records.length === 0 && (
+                {branchRecords.length === 0 && (
                   <tr><td colSpan="4" className="text-center py-6 text-gray-500">No active procurement data recorded.</td></tr>
                 )}
               </tbody>

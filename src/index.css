@@ -6,3 +6,58 @@ body{
   color:white;
   font-family:sans-serif;
 }
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    min-width: 320px;
+  }
+
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .page-container {
+    width: 100%;
+    max-width: 1536px;
+    margin-inline: auto;
+  }
+
+  .card-premium,
+  .glass {
+    width: 100%;
+  }
+
+  .table-wrapper,
+  .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 640px) {
+  .page-container h1 {
+    font-size: clamp(1.75rem, 8vw, 2.5rem);
+    line-height: 1.1;
+  }
+
+  .page-container h2,
+  .page-container h3 {
+    line-height: 1.2;
+  }
+
+  table {
+    min-width: 680px;
+  }
+}
