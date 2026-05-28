@@ -1,12 +1,12 @@
 import { useState, useEffect } from "react";
 import {
-  collection, addDoc, onSnapshot,
-  query, orderBy, serverTimestamp, Timestamp
+  collection, addDoc, onSnapshot, updateDoc, deleteDoc, doc,
+  query, orderBy, serverTimestamp
 } from "firebase/firestore";
 import { db } from "../firebase";
 
 const CATEGORIES = [
-  { value: "Utilities",    label: "💡 Utilities & Power",       color: "text-yellow-400" },
+  { value: "Utilities",    label: "💡 Utilities & Power",    color: "text-yellow-400" },
   { value: "Logistics",    label: "🚚 Transport & Logistics",   color: "text-orange-400" },
   { value: "Salaries",     label: "👥 Personnel Wages",         color: "text-blue-400"   },
   { value: "Maintenance",  label: "🔧 Machine Maintenance",     color: "text-red-400"    },
@@ -24,6 +24,7 @@ export default function Expenses() {
   const [amount, setAmount]       = useState("");
   const [toast, setToast]         = useState(null);
   const [saving, setSaving]       = useState(false);
+  const [editingId, setEditingId] = useState(null);
 
   useEffect(() => {
     const q = query(collection(db, "expenses"), orderBy("timestamp", "desc"));
@@ -44,22 +45,61 @@ export default function Expenses() {
 
     setSaving(true);
     try {
-      await addDoc(collection(db, "expenses"), {
+      const payload = {
         title,
         category,
         amount: Number(amount),
-        // ISO string so Dashboard date parsing works reliably
-        date: new Date().toISOString(),
-        timestamp: serverTimestamp(),
-      });
+      };
+
+      if (editingId) {
+        // Update operational flow
+        await updateDoc(doc(db, "expenses", editingId), payload);
+        showToast("Expense log updated successfully!");
+        setEditingId(null);
+      } else {
+        // Create operational flow
+        await addDoc(collection(db, "expenses"), {
+          ...payload,
+          date: new Date().toISOString(),
+          timestamp: serverTimestamp(),
+        });
+        showToast("Expense logged successfully!");
+      }
+      
       setTitle("");
       setAmount("");
-      showToast("Expense logged successfully!");
+      setCategory("Utilities");
     } catch (err) {
       console.error(err);
       showToast("Failed to save. Try again.", "error");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleEditInit = (exp) => {
+    setEditingId(exp.id);
+    setTitle(exp.title);
+    setCategory(exp.category);
+    setAmount(String(exp.amount));
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setTitle("");
+    setAmount("");
+    setCategory("Utilities");
+  };
+
+  const handleDeleteExpense = async (id) => {
+    if (!window.confirm("Are you sure you want to permanently delete this expense log?")) return;
+    try {
+      await deleteDoc(doc(db, "expenses", id));
+      showToast("Expense entry deleted.", "success");
+      if (editingId === id) handleCancelEdit();
+    } catch (err) {
+      console.error(err);
+      showToast("Failed to delete item.", "error");
     }
   };
 
@@ -111,7 +151,7 @@ export default function Expenses() {
         {/* Log Form */}
         <form onSubmit={handleSubmit} className="bg-[#07294d] border border-blue-900/60 p-6 rounded-2xl space-y-4 h-fit">
           <h3 className="text-lg font-bold text-red-400 border-b border-blue-900/50 pb-3">
-            💸 Log Cash Outflow
+            {editingId ? "📝 Modify Outflow Log" : "💸 Log Cash Outflow"}
           </h3>
 
           <div>
@@ -153,13 +193,24 @@ export default function Expenses() {
             />
           </div>
 
-          <button
-            type="submit"
-            disabled={saving}
-            className="w-full bg-red-600 hover:bg-red-700 disabled:opacity-60 py-3 rounded-xl font-bold text-sm transition-all"
-          >
-            {saving ? "Saving…" : "📌 Log Expense"}
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-60 py-3 rounded-xl font-bold text-sm transition-all"
+            >
+              {saving ? "Saving…" : editingId ? "Update Entry" : "📌 Log Expense"}
+            </button>
+            {editingId && (
+              <button
+                type="button"
+                onClick={handleCancelEdit}
+                className="bg-gray-700 hover:bg-gray-600 px-4 rounded-xl text-xs font-bold transition-all"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
 
           {/* Running total */}
           <div className="bg-red-950/40 border border-red-900/40 rounded-xl p-3 text-center">
@@ -181,11 +232,12 @@ export default function Expenses() {
                   <th className="pb-3">Description</th>
                   <th className="pb-3">Category</th>
                   <th className="pb-3 text-right">Amount (₹)</th>
+                  <th className="pb-3 text-center">Actions</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-blue-900/30">
                 {expenses.map((exp) => (
-                  <tr key={exp.id} className="border-b border-blue-900/30 hover:bg-blue-900/20 transition-colors">
+                  <tr key={exp.id} className="hover:bg-blue-900/20 transition-colors">
                     <td className="py-3 text-xs text-gray-400 whitespace-nowrap">{fmt(exp.date)}</td>
                     <td className="py-3 font-semibold text-white">{exp.title}</td>
                     <td className="py-3">
@@ -193,14 +245,32 @@ export default function Expenses() {
                         {exp.category}
                       </span>
                     </td>
-                    <td className="py-3 text-right font-black text-red-400">
+                    <td className="py-3 text-right font-black text-red-400 whitespace-nowrap">
                       − ₹{Number(exp.amount).toLocaleString()}
+                    </td>
+                    <td className="py-3 text-center">
+                      <div className="flex justify-center items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleEditInit(exp)}
+                          className="px-2 py-1 text-[11px] font-bold rounded bg-amber-500/10 border border-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition-all"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteExpense(exp.id)}
+                          className="px-2 py-1 text-[11px] font-bold rounded bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/30 transition-all"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
                 {expenses.length === 0 && (
                   <tr>
-                    <td colSpan="4" className="py-10 text-center text-gray-500">
+                    <td colSpan="5" className="py-10 text-center text-gray-500">
                       No expenses recorded yet.
                     </td>
                   </tr>

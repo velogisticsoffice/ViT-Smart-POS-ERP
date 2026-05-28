@@ -7,6 +7,7 @@ import {
   Landmark,
   PackagePlus,
   PackageSearch,
+  Receipt, // <-- Added the Receipt icon here
   Settings,
   ShoppingCart,
   UsersRound,
@@ -25,6 +26,7 @@ const menuItems = [
   { id: "branches", label: "Users & Branches", icon: UsersRound },
   { id: "attendance", label: "Attendance", icon: CalendarCheck },
   { id: "loans", label: "Bank Loans", icon: Landmark },
+  { id: "expenses", label: "Expenses Ledger", icon: Receipt }, // <-- Added Expenses here!
   { id: "reports", label: "Reports", icon: BarChart3 },
   { id: "settings", label: "Settings", icon: Settings },
 ];

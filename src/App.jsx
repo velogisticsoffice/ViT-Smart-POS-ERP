@@ -61,7 +61,7 @@ function BusinessSwitcher({ compact = false }) {
   );
 }
 
-function DashboardHome() {
+function DashboardHome({ onNavigate }) {
   const { currentBranch, currentUser } = useBusinessContext();
   const recentOrders = [
     ["INV-10025", "18 May 2025", "₹1,250"],
@@ -234,11 +234,15 @@ function DashboardHome() {
         </div>
       </div>
 
-        <div className="rounded-2xl border border-cyan-400/30 bg-blue-950/60 p-4">
+      <div className="rounded-2xl border border-cyan-400/30 bg-blue-950/60 p-4">
         <h2 className="mb-3 font-bold">Quick Actions</h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-5">
           {["New Billing", "Add Product", "Stock Transfer", "Purchase Entry", "Expense Entry"].map((action) => (
-            <button key={action} className="flex min-h-12 items-center justify-center gap-3 rounded-xl border border-cyan-400/30 bg-blue-900/70 p-3 text-sm font-semibold hover:bg-blue-700 sm:text-base">
+            <button
+              key={action}
+              onClick={() => action === "Expense Entry" && onNavigate("expenses")}
+              className="flex min-h-12 items-center justify-center gap-3 rounded-xl border border-cyan-400/30 bg-blue-900/70 p-3 text-sm font-semibold hover:bg-blue-700 sm:text-base transition-colors"
+            >
               <PackagePlus className="h-5 w-5 text-cyan-300" />
               {action}
             </button>
@@ -285,6 +289,7 @@ export default function App() {
       attendance: () => import("./pages/EmployeeAttendance"),
       loans: () => import("./pages/BankLoanRepayment"),
       reports: () => import("./pages/Reports"),
+      expenses: () => import("./pages/Expenses"), // 💡 Registered correctly here!
     };
 
     try {
@@ -297,7 +302,7 @@ export default function App() {
   };
 
   const renderPage = () => {
-    if (activePage === "dashboard") return <DashboardHome />;
+    if (activePage === "dashboard") return <DashboardHome onNavigate={handleNavigate} />;
     if (activePage === "settings") return <SettingsPage />;
     if (pageError) {
       return (
