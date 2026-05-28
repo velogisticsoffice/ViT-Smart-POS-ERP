@@ -17,6 +17,14 @@ export default function MillingService() {
       : demoInventory.map((item) => ({ ...item, branchId: item.branchId || "main" }))
   );
 
+  // Verification checks for admin authorization status
+  const isAdmin = currentUser?.role === "admin" || currentUser?.isAdmin || false;
+
+  // Ledger Filter & Sorting States
+  const [selectedBranchId, setSelectedBranchId] = useState(currentBranchId || "main");
+  const [startDateFilter, setStartDateFilter] = useState("");
+  const [endDateFilter, setEndDateFilter] = useState("");
+
   // Form Basic Input States
   const [farmerName, setFarmerName] = useState("");
   const [farmerPhone, setFarmerPhone] = useState("");
@@ -44,15 +52,33 @@ export default function MillingService() {
   const [isLoading, setIsLoading] = useState(isFirebaseConfigured);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Live Subscription Fetching
+  // Sync state if context changes loaded branch configuration properties 
+  useEffect(() => {
+    if (currentBranchId && !isAdmin) {
+      setSelectedBranchId(currentBranchId);
+    }
+  }, [currentBranchId, isAdmin]);
+
+  // Live Subscription Fetching bound to Admin Selectable Branch State Engine
   useEffect(() => {
     if (!isFirebaseConfigured) return undefined;
 
-    const qJobs = query(
-      collection(db, "milling_jobs"),
-      where("branchId", "==", currentBranchId || "main"),
-      orderBy("timestamp", "desc")
-    );
+    setIsLoading(true);
+    let qJobs;
+
+    if (selectedBranchId === "all" && isAdmin) {
+      qJobs = query(
+        collection(db, "milling_jobs"),
+        orderBy("timestamp", "desc")
+      );
+    } else {
+      qJobs = query(
+        collection(db, "milling_jobs"),
+        where("branchId", "==", selectedBranchId || "main"),
+        orderBy("timestamp", "desc")
+      );
+    }
+
     const unsubJobs = onSnapshot(qJobs, (snap) => {
       setJobs(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
       setIsLoading(false);
@@ -62,7 +88,7 @@ export default function MillingService() {
     });
 
     const unsubInventory = onSnapshot(
-      query(collection(db, "inventory"), where("branchId", "==", currentBranchId || "main")),
+      query(collection(db, "inventory"), where("branchId", "==", selectedBranchId || "main")),
       (snap) => {
         setInventoryItems(snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
       }
@@ -72,7 +98,68 @@ export default function MillingService() {
       unsubJobs();
       unsubInventory();
     };
-  }, [currentBranchId]);
+  }, [selectedBranchId, isAdmin]);
+
+  // Comprehensive Multi-Parametric Filter Logic (Date / Month Evaluation)
+  const filteredJobs = jobs.filter((item) => {
+    if (startDateFilter || endDateFilter) {
+      const itemDate = item.timestamp?.toDate ? item.timestamp.toDate() : new Date(item.date);
+      
+      if (startDateFilter) {
+        const start = new Date(startDateFilter);
+        start.setHours(0, 0, 0, 0);
+        if (itemDate < start) return false;
+      }
+      
+      if (endDateFilter) {
+        const end = new Date(endDateFilter);
+        end.setHours(23, 59, 59, 999);
+        if (itemDate > end) return false;
+      }
+    }
+    return true;
+  });
+
+  // Native CSV Document Generation Engine
+  const downloadLedgerCSV = () => {
+    if (filteredJobs.length === 0) return alert("No ledger records available to export for this selection matrix.");
+
+    const headers = [
+      "Slip ID", "Date", "Customer Name", "Phone", "Vehicle ID", 
+      "Copra Weight (KG)", "Moisture %", "Oil Yield %", "Expected Oil (L)", 
+      "Expected Cake (KG)", "Loss (KG)", "Processing Model", "Settlement Due (₹)", 
+      "Direction", "Branch Node"
+    ];
+
+    const rows = filteredJobs.map(item => [
+      item.serviceNo || "N/A",
+      item.date || "N/A",
+      item.farmerName || "N/A",
+      item.farmerPhone || "N/A",
+      item.vehicleNumber || "N/A",
+      item.copraWeight || 0,
+      item.moisturePct || 0,
+      item.extractionRate || 0,
+      Number(item.expectedOil || 0).toFixed(2),
+      Number(item.expectedCake || 0).toFixed(2),
+      Number(item.wasteLoss || 0).toFixed(2),
+      item.processingType || "N/A",
+      Math.round(item.finalSettlementAmount || 0),
+      item.settlementDirection === "factory_pays" ? "Factory Outflow" : "Customer Owed",
+      item.branchName || "Main System"
+    ]);
+
+    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" 
+      + [headers.join(","), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(","))].join("\n");
+    
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `Copra_Processing_Ledger_Export_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // Real-Time Dynamic ERP Yield Math
   const weightVal = Number(copraWeight || 0);
@@ -109,33 +196,29 @@ export default function MillingService() {
   let settlementDirection = "customer_pays"; // customer_pays OR factory_pays
 
   switch (processingType) {
-    case "service_only": // Model 1 / Model 5
+    case "service_only": 
       finalSettlementAmount = aggregateCharges;
       settlementDirection = "customer_pays";
       break;
 
-    case "oil_purchase": // Model 2
-      // Factory buys oil, customer retains cake, processing charge applied
+    case "oil_purchase": 
       finalSettlementAmount = totalOilValue - aggregateCharges;
       settlementDirection = finalSettlementAmount >= 0 ? "factory_pays" : "customer_pays";
       finalSettlementAmount = Math.abs(finalSettlementAmount);
       break;
 
-    case "copra_purchase": // Model 3
-      // Factory directly buys raw copra weight outright
+    case "copra_purchase": 
       finalSettlementAmount = totalCopraValue;
       settlementDirection = "factory_pays";
       break;
 
-    case "service_cake_deduction": // Model 4
-      // Customer keeps oil, factory retains cake to discount service fee
+    case "service_cake_deduction": 
       finalSettlementAmount = aggregateCharges - totalCakeValue;
       settlementDirection = finalSettlementAmount >= 0 ? "customer_pays" : "factory_pays";
       finalSettlementAmount = Math.abs(finalSettlementAmount);
       break;
 
-    case "net_settlement": // Model 6
-      // Factory buys both oil and cake, deducts all processing charges
+    case "net_settlement": 
       finalSettlementAmount = (totalOilValue + totalCakeValue) - aggregateCharges;
       settlementDirection = finalSettlementAmount >= 0 ? "factory_pays" : "customer_pays";
       finalSettlementAmount = Math.abs(finalSettlementAmount);
@@ -240,7 +323,6 @@ export default function MillingService() {
     };
 
     if (!isFirebaseConfigured) {
-      // Local Memory Sync fallback State engine
       setJobs((prev) => [ { id: String(Date.now()), ...currentJobPayload }, ...prev ]);
       downloadMillingSlip(currentJobPayload);
       setIsSubmitting(false);
@@ -250,22 +332,9 @@ export default function MillingService() {
 
     try {
       await runTransaction(db, async (transaction) => {
-        // --- 1. SEPARATED STOCK LEDGER INVENTORY MANAGEMENT ---
-        // Fetch or assign stock items depending on processing ownership criteria
-        const factoryOilSku = "FACT-OIL";
-        const customerOilSku = "CUST-OIL";
-        const generalCakeSku = "COPRA-CAKE";
-        const factoryCopraSku = "FACT-COPRA";
-
-        // Query arrays logic helper inside transactions
-        // Note: Real enterprise architecture fetches refs dynamically via predefined keys. 
-        // We will push structured document allocations into respective collection nodes.
-
-        // --- 2. CREATE PRIMARY MILLING LOG ENTRIES ---
         const millingRef = doc(collection(db, "milling_jobs"));
         transaction.set(millingRef, { ...currentJobPayload, timestamp: serverTimestamp() });
 
-        // --- 3. AUTO LEDGER FINANCIAL ACCOUNTING POSTING ---
         const generalLedgerRef = doc(collection(db, "sales"));
         let narrative = `Milling Log ${slipIdentifier} via style: ${processingType}. Total Processed Weight: ${weightVal}KG.`;
         
@@ -318,40 +387,40 @@ export default function MillingService() {
             Copra Service Processing Management
           </h1>
         </div>
-        <div className="bg-[#07294d] border border-blue-900 px-4 py-2.5 rounded-xl shadow-inner text-sm text-slate-300">
-          📍 Core Operating Hub: <span className="font-bold text-amber-400">{currentBranch?.name || "Main Terminal"}</span>
+        <div className="bg-[#07294d] border border-blue-900 px-4 py-2.5 rounded-xl shadow-inner text-sm text-slate-300 flex items-center gap-2">
+          <span>📍</span> Core Operating Hub: <span className="font-bold text-amber-400">{currentBranch?.name || "Main Terminal"}</span>
         </div>
       </div>
 
-      {/* Dynamic KPI Analytics Matrix Boards */}
+      {/* Dynamic KPI Analytics Matrix Boards (Changes based on current active filters) */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
         <div className="bg-[#07294d] border border-blue-900/80 p-5 rounded-2xl shadow-lg">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Aggregate Processing Log</p>
           <p className="text-2xl md:text-3xl font-black mt-2 text-white">
-            {jobs.reduce((sum, j) => sum + Number(j.copraWeight || 0), 0).toLocaleString()} <span className="text-xs font-normal text-slate-400">KG</span>
+            {filteredJobs.reduce((sum, j) => sum + Number(j.copraWeight || 0), 0).toLocaleString()} <span className="text-xs font-normal text-slate-400">KG</span>
           </p>
         </div>
         <div className="bg-[#07294d] border border-blue-900/80 p-5 rounded-2xl shadow-lg">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Dynamic Estimated Oil</p>
           <p className="text-2xl md:text-3xl font-black mt-2 text-yellow-400">
-            {jobs.reduce((sum, j) => sum + Number(j.expectedOil || 0), 0).toFixed(1)} <span className="text-xs font-normal text-slate-400">Ltrs</span>
+            {filteredJobs.reduce((sum, j) => sum + Number(j.expectedOil || 0), 0).toFixed(1)} <span className="text-xs font-normal text-slate-400">Ltrs</span>
           </p>
         </div>
         <div className="bg-[#07294d] border border-blue-900/80 p-5 rounded-2xl shadow-lg">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Retained Byproduct Cake</p>
           <p className="text-2xl md:text-3xl font-black mt-2 text-emerald-400">
-            {jobs.reduce((sum, j) => sum + Number(j.expectedCake || 0), 0).toFixed(1)} <span className="text-xs font-normal text-slate-400">KG</span>
+            {filteredJobs.reduce((sum, j) => sum + Number(j.expectedCake || 0), 0).toFixed(1)} <span className="text-xs font-normal text-slate-400">KG</span>
           </p>
         </div>
         <div className="bg-[#07294d] border border-blue-900/80 p-5 rounded-2xl shadow-lg">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Gross Operation Charges</p>
           <p className="text-2xl md:text-3xl font-black mt-2 text-blue-400">
-            ₹{jobs.reduce((sum, j) => sum + Number(j.aggregateCharges || 0), 0).toLocaleString()}
+            ₹{filteredJobs.reduce((sum, j) => sum + Number(j.aggregateCharges || 0), 0).toLocaleString()}
           </p>
         </div>
         <div className="grid grid-cols-1 col-span-2 lg:col-span-1 bg-gradient-to-br from-amber-600/20 to-blue-600/10 border border-amber-500/30 p-5 rounded-2xl shadow-lg">
           <p className="text-xs font-bold text-amber-400 uppercase tracking-wider">Live Active Batches</p>
-          <p className="text-3xl font-black mt-1 text-white">{jobs.length}</p>
+          <p className="text-3xl font-black mt-1 text-white">{filteredJobs.length}</p>
         </div>
       </div>
 
@@ -548,13 +617,75 @@ export default function MillingService() {
 
         {/* Live System Logs Ledger Tracking Data Tables */}
         <div className="xl:col-span-2 bg-[#07294d] border border-blue-900/70 p-6 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-          <div className="flex justify-between items-center border-b border-blue-900 pb-4 mb-5">
-            <h3 className="text-lg font-bold text-slate-200">
-              Copra Processing Audit Logs Ledger
-            </h3>
-            <span className="text-xs font-mono px-2.5 py-1 bg-[#031B34] text-slate-400 border border-blue-900 rounded">
-              Total Records: {jobs.length}
-            </span>
+          
+          {/* Header & Controls Matrix Block */}
+          <div className="border-b border-blue-900 pb-4 mb-5 space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-3">
+              <div>
+                <h3 className="text-lg font-bold text-slate-200">
+                  Copra Processing Audit Logs Ledger
+                </h3>
+                <p className="text-xs text-slate-400">Real-time parametric cloud accounting engine log</p>
+              </div>
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={downloadLedgerCSV}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition-colors shadow flex items-center gap-1.5"
+                >
+                  📥 Export CSV Ledger
+                </button>
+                <span className="text-xs font-mono px-2.5 py-1.5 bg-[#031B34] text-slate-400 border border-blue-900 rounded-xl">
+                  Records: {filteredJobs.length}
+                </span>
+              </div>
+            </div>
+
+            {/* Filter controls row */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-[#031B34]/50 p-3 rounded-xl border border-blue-900/60">
+              {/* Plant / Hub controller segment */}
+              <div>
+                <label className="text-[10px] text-slate-400 block mb-1 font-semibold uppercase tracking-wider">Plant Processing Node</label>
+                <select
+                  value={selectedBranchId}
+                  onChange={(e) => setSelectedBranchId(e.target.value)}
+                  disabled={!isAdmin}
+                  className="w-full bg-[#031B34] border border-blue-900 p-2 rounded-lg text-xs text-white font-medium outline-none focus:border-blue-500 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {!isAdmin && <option value={currentBranchId || "main"}>{currentBranch?.name || "Current Plant Location"}</option>}
+                  {isAdmin && (
+                    <>
+                      <option value="all">🌐 All Enterprise Plants</option>
+                      <option value="main">Main Core Branch</option>
+                      <option value="plant_b">Plant Unit B (South)</option>
+                      <option value="plant_c">Plant Unit C (North)</option>
+                    </>
+                  )}
+                </select>
+              </div>
+
+              {/* Start Date picker component */}
+              <div>
+                <label className="text-[10px] text-slate-400 block mb-1 font-semibold uppercase tracking-wider">Start Date Range</label>
+                <input 
+                  type="date"
+                  value={startDateFilter}
+                  onChange={(e) => setStartDateFilter(e.target.value)}
+                  className="w-full bg-[#031B34] border border-blue-900 p-2 rounded-lg text-xs text-white outline-none focus:border-blue-500 scheme-dark"
+                />
+              </div>
+
+              {/* End Date picker component */}
+              <div>
+                <label className="text-[10px] text-slate-400 block mb-1 font-semibold uppercase tracking-wider">End Date Range</label>
+                <input 
+                  type="date"
+                  value={endDateFilter}
+                  onChange={(e) => setEndDateFilter(e.target.value)}
+                  className="w-full bg-[#031B34] border border-blue-900 p-2 rounded-lg text-xs text-white outline-none focus:border-blue-500 scheme-dark"
+                />
+              </div>
+            </div>
           </div>
 
           {isLoading ? (
@@ -574,7 +705,7 @@ export default function MillingService() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-blue-900/30">
-                  {jobs.map((item) => (
+                  {filteredJobs.map((item) => (
                     <tr key={item.id} className="hover:bg-blue-900/20 transition-colors">
                       <td className="p-3 whitespace-nowrap">
                         <div className="font-mono font-bold text-amber-400">{item.serviceNo || "MIL-LEGACY"}</div>
@@ -621,10 +752,10 @@ export default function MillingService() {
                       </td>
                     </tr>
                   ))}
-                  {jobs.length === 0 && (
+                  {filteredJobs.length === 0 && (
                     <tr>
                       <td colSpan="7" className="text-center py-16 text-slate-500 font-medium">
-                        No active processing records found in this ERP cluster database.
+                        No active processing records found matching the configured search filters.
                       </td>
                     </tr>
                   )}
